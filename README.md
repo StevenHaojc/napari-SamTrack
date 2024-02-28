@@ -4,3 +4,4 @@
 | **box_prompt** | ✓ | × |
 | **MutiObject** | ✓ | ✓ |
 | **Refineable** | ✓ | × |
+| **division** | ✓ | × |

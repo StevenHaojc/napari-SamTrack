@@ -3,7 +3,7 @@ samv7.py is the current version.
 | function | micro_sam | ours |
 | --- | --- | --- |
 | **point_prompt** | ✓ | ✓ |
-| **box_prompt** | ✓ | × |
+| **box_prompt** | ✓ | ✓ |
 | **MutiObject** | ✓ | ✓ |
 | **Refineable** | ✓ | × |
-| **division** | ✓ | × |
+| **Seg&Track Anything** | × | ✓ |

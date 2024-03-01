@@ -65,6 +65,37 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import binary_dilation
 import gc
 
+def draw_mask(img, mask, alpha=0.5, id_countour=False):
+    img_mask = np.zeros_like(img)
+    img_mask = img
+    if id_countour:
+        # very slow ~ 1s per image
+        obj_ids = np.unique(mask)
+        obj_ids = obj_ids[obj_ids!=0]
+
+        for id in obj_ids:
+            # Overlay color on  binary mask
+            if id <= 255:
+                color = _palette[id*3:id*3+3]
+            else:
+                color = [0,0,0]
+            foreground = img * (1-alpha) + np.ones_like(img) * alpha * np.array(color)
+            binary_mask = (mask == id)
+
+            # Compose image
+            img_mask[binary_mask] = foreground[binary_mask]
+
+            countours = binary_dilation(binary_mask,iterations=1) ^ binary_mask
+            img_mask[countours, :] = 0
+    else:
+        binary_mask = (mask!=0)
+        countours = binary_dilation(binary_mask,iterations=1) ^ binary_mask
+        foreground = img*(1-alpha)+colorize_mask(mask)*alpha
+        img_mask[binary_mask] = foreground[binary_mask]
+        img_mask[countours,:] = 0
+        
+    return img_mask.astype(img.dtype)
+
 def save_prediction(pred_mask,output_dir,file_name):
     save_mask = Image.fromarray(pred_mask.astype(np.uint8))
     save_mask = save_mask.convert(mode='P')
@@ -156,6 +187,7 @@ class SliderDock(QWidget):
         self.output = './'
         self.updated_data = []
         self.updated_Negdata = []
+        self.updated_box = None
         self.exist_mask = False
         self.masksq = False   #   mask序列是否存在，若不存在，则加入mask序列，若存在，则更新mask序列
         layout = QHBoxLayout()
@@ -196,6 +228,10 @@ class SliderDock(QWidget):
         addobj.clicked.connect(self.add_object)
         layout.addWidget(addobj)
 
+        addbox = QPushButton("Add Box")
+        addbox.clicked.connect(self.add_box)
+        layout.addWidget(addbox)
+
         seleobj = QPushButton("Select Object")
         seleobj.clicked.connect(self.select_object)
         layout.addWidget(seleobj)
@@ -208,6 +244,10 @@ class SliderDock(QWidget):
         track_button.clicked.connect(self.track_image)
         layout.addWidget(track_button)
 
+        clr_btn = QPushButton("Clear")
+        clr_btn.clicked.connect(self.clear)
+        layout.addWidget(clr_btn)
+
         self.textbox = QLineEdit()
         self.textbox.setText("当前操作对象id: "+str(self.tracker.curr_idx))
         self.textbox.setReadOnly(True)
@@ -215,6 +255,32 @@ class SliderDock(QWidget):
 
 
         self.setLayout(layout)
+
+    def clear(self):
+        if "Points" in self.viewer.layers:
+            self.viewer.layers["Points"].data = []
+            self.viewer.layers["Points"].refresh()
+        if "Box" in self.viewer.layers:
+            self.viewer.layers["Box"].data = []
+            self.viewer.layers["Box"].refresh()
+
+    def add_box(self):
+        box_layer = viewer.add_shapes(
+            shape_type="rectangle",  # FIXME workaround
+            edge_width=4, ndim=3,
+            face_color="transparent",
+            edge_color='green', 
+            name='Box')
+        viewer.layers['Box'].mode = 'add_rectangle'
+        self.box_data = viewer.layers['Box'].data
+        def box_callback(event):
+        # 获取更新后的点数据
+            self.updated_box = box_layer.data
+        # 打印最新的点坐标
+            print("更新后的box坐标:", self.updated_box)
+        
+        # 点数据变化的事件回调
+        box_layer.events.data.connect(box_callback)
 
     def add_Negpoints(self):
         Negpoints_layer = viewer.add_points(size=5, face_color='blue', edge_color='green', name='NegPoints')
@@ -319,13 +385,6 @@ class SliderDock(QWidget):
         click_stack = [[],[]]
         print("当前对象id: ", self.tracker.curr_idx)
         print("跟踪对象总数量: ", self.tracker.get_obj_num() + 1)
-
-
-        
-        ############ 输出路径 ############
-        output_dir = io_args['output_mask_dir']
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
         
         ############ 定义模型 ############
         torch.cuda.empty_cache()
@@ -351,7 +410,49 @@ class SliderDock(QWidget):
                     click_prompt = get_click_prompt(click_stack, point)
             
             # Refine acc to prompt
-            masked_frame, pred_mask = seg_acc_click(self.tracker, click_prompt, self.viewer.layers['image'].data)    
+            masked_frame, pred_mask = seg_acc_click(self.tracker, click_prompt, self.viewer.layers['image'].data)
+
+            if len(self.mask_sequence) == 0 and self.exist_mask == False:
+                self.mask_sequence.append(masked_frame)
+                
+                viewer.add_image(self.mask_sequence[0], name='mask')
+                self.exist_mask = True
+            elif len(self.mask_sequence) == 0 and self.exist_mask == True:
+                self.mask_sequence.append(masked_frame)
+            else:
+                self.mask_sequence[0] = masked_frame
+            self.viewer.layers['mask'].data = masked_frame
+
+        if self.updated_box is not None:
+            
+            bc_id = self.tracker.curr_idx
+            bc_mask = self.tracker.origin_merged_mask
+            #   one-object
+            for box in self.updated_box:
+
+                point1_XY = box[0][::-1][:-1]
+                point2_XY = box[2][::-1][:-1]
+                # box_coord = np.array([box[0][::-1][:-1], box[2][::-1][:-1]])
+                # 包含两个数组 [左上角坐标[1, 1]，右下角坐标[2,2]]
+                # box_coord = np.array([[box[0][1], box[0][0]], [box[2][1], box[2][0]]])
+                # box_coord = np.array([[box[0][0], box[0][1]], [box[2][0], box[2][1]]])
+                box_coord = np.array([[point1_XY[0], point1_XY[1]], [point2_XY[0], point2_XY[1]]])
+
+            
+            interactive_mask = self.tracker.sam.segment_with_box(self.viewer.layers['image'].data, box_coord, reset_image=True)[0]
+            refined_merged_mask = self.tracker.add_mask(interactive_mask)
+            masked_frame = draw_mask(self.viewer.layers['image'].data.copy(), refined_merged_mask)
+
+            # draw bbox
+            # masked_frame = cv2.rectangle(masked_frame, box_coord[0], box_coord[1], (0, 0, 255))   
+            self.tracker.update_origin_merged_mask(refined_merged_mask)
+            
+            
+            # reset origin_mask refine
+            self.tracker.reset_origin_merged_mask(bc_mask, bc_id)
+            self.tracker.curr_idx += 1  
+
+            self.tracker = SegTracker_add_first_frame(self.tracker, self.viewer.layers['image'].data, interactive_mask)
             if len(self.mask_sequence) == 0 and self.exist_mask == False:
                 self.mask_sequence.append(masked_frame)
                 
@@ -373,7 +474,7 @@ class SliderDock(QWidget):
         # image_index = self.slider.value()
         # image = image_sequence[image_index]
         ############  导入视频  ############
-        if len(self.updated_data) >= 1:
+        if len(self.updated_data) >= 1 or self.updated_box is not None:
             with torch.cuda.amp.autocast():
             # while cap.isOpened():
             #     ret, frame = cap.read()    ############ 读取视频帧  ############
